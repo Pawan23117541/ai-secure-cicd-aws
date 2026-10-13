@@ -70,7 +70,7 @@ def home():
 
 @app.get("/health")
 def health():
-    return jsonify(status="ok", version=APP_VERSION)
+    return jsonify(status="okay", version=APP_VERSION)
 
 
 @app.get("/api/tasks")
