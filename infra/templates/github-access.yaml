@@ -94,6 +94,7 @@ Resources:
                 Effect: Allow
                 Action:
                   - ec2:Describe*
+                  - ec2:GetSecurityGroupsForVpc # NEW: the load balancer needs this to check its security groups
                   - ec2:CreateSecurityGroup
                   - ec2:DeleteSecurityGroup
                   - ec2:AuthorizeSecurityGroupIngress
