@@ -1,0 +1,3 @@
+# Accepted security risks. Put one rule ID per line (for example CVE-2024-12345 or B105).
+# Always add a comment explaining WHY it is accepted and WHEN you will review it again.
+# Findings listed here will not fail the security gate.

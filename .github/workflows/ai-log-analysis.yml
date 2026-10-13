@@ -1,0 +1,108 @@
+name: AI Log Analysis
+
+# Runs AFTER the CI-CD Pipeline finishes. If that run failed, it sends the failed logs
+# to Amazon Bedrock and posts the AI's troubleshooting suggestions for a HUMAN to review.
+on:
+  workflow_run:
+    workflows: ["CI-CD Pipeline"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyse failed run with Amazon Bedrock
+    if: github.event.workflow_run.conclusion == 'failure'
+    runs-on: ubuntu-latest
+    environment: aws-main # holds the AWS keys; only usable from the main branch
+    permissions:
+      contents: read
+      actions: read # read the failed run's logs and artifacts
+      issues: write # open an issue when main fails
+      pull-requests: write # comment on the PR when a PR fails
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RUN_ID: ${{ github.event.workflow_run.id }}
+    steps:
+      # Checks out the trusted main branch - never the code from the failed PR
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install boto3
+        run: pip install "boto3>=1.35.0"
+
+      - name: Download logs of the failed jobs
+        run: |
+          mkdir -p reports
+          gh run view "$RUN_ID" --repo "${{ github.repository }}" --log-failed > reports/failed-jobs.log || true
+          wc -l reports/failed-jobs.log
+
+      - name: Download deployment diagnostics (if the deploy failed)
+        run: |
+          gh run download "$RUN_ID" --repo "${{ github.repository }}" \
+            --name deploy-diagnostics --dir reports/diagnostics || echo "No deploy diagnostics"
+
+      - name: Log in to AWS (assume the Bedrock-only role)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: ${{ vars.AWS_AI_ROLE_ARN }}
+          role-duration-seconds: 3600
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Ask Amazon Bedrock to analyse the logs
+        env:
+          BEDROCK_MODEL_ID: ${{ vars.BEDROCK_MODEL_ID }}
+          CONTEXT: >-
+            workflow=${{ github.event.workflow_run.name }},
+            branch=${{ github.event.workflow_run.head_branch }},
+            event=${{ github.event.workflow_run.event }},
+            commit=${{ github.event.workflow_run.head_sha }},
+            run=${{ github.event.workflow_run.html_url }}
+        run: |
+          LOGS="--log reports/failed-jobs.log"
+          for f in reports/diagnostics/*.txt; do [ -f "$f" ] && LOGS="$LOGS --log $f"; done
+          python scripts/ai_log_analyzer.py $LOGS --context "$CONTEXT" --out reports/ai-analysis.md
+
+      - name: Post suggestions for human review
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('reports/ai-analysis.md', 'utf8');
+            const run = context.payload.workflow_run;
+            const { owner, repo } = context.repo;
+            const marker = '<!-- ai-log-analysis -->';
+
+            if (run.pull_requests && run.pull_requests.length > 0) {
+              // Failed pull request -> comment on it (update our old comment if there is one)
+              const issue_number = run.pull_requests[0].number;
+              const comments = await github.paginate(github.rest.issues.listComments,
+                { owner, repo, issue_number });
+              const old = comments.find(c => c.body && c.body.includes(marker));
+              if (old) {
+                await github.rest.issues.updateComment({ owner, repo, comment_id: old.id, body });
+              } else {
+                await github.rest.issues.createComment({ owner, repo, issue_number, body });
+              }
+              core.notice(`Posted AI analysis on PR #${issue_number}`);
+            } else {
+              // Failed run on main -> open an issue that a human must triage
+              const issue = await github.rest.issues.create({
+                owner, repo,
+                title: `AI analysis: ${run.name} failed on ${run.head_branch} (${run.head_sha.slice(0, 7)})`,
+                body,
+                labels: ['ai-suggestion', 'needs-human-review'],
+              });
+              core.notice(`Opened issue #${issue.data.number}`);
+            }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ai-analysis
+          path: reports/ai-analysis.md

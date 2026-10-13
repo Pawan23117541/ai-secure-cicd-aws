@@ -1,0 +1,5 @@
+# Settings for the "dev" environment. Every stack in this folder inherits them.
+stack_tags:
+  Project: secure-cicd
+  Environment: dev
+  ManagedBy: sceptre

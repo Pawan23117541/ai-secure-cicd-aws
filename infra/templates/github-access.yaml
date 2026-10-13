@@ -1,0 +1,242 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  How GitHub Actions gets into AWS. Your AWS organization blocks OIDC identity providers,
+  so GitHub uses one tiny IAM user whose ONLY permission is to assume two least-privilege
+  roles: AI analysis (Bedrock only) and deploy (one ECR repo + one CloudFormation stack).
+  Its keys live in a GitHub environment that only the main branch can use.
+  A third role is the CloudFormation service role that actually builds the ECS resources.
+
+Parameters:
+  ProjectName:
+    Type: String
+  EnvironmentName:
+    Type: String
+  EcrRepositoryArn:
+    Type: String
+
+Resources:
+  # ---------------- The GitHub CI user (keys go into GitHub secrets) ----------------
+  GitHubCiUser:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: !Sub ${ProjectName}-github-ci
+      Policies:
+        - PolicyName: assume-pipeline-roles-only
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: OnlyStepIntoTheTwoPipelineRoles
+                Effect: Allow
+                Action:
+                  - sts:AssumeRole
+                  - sts:TagSession # the GitHub AWS login action tags its session
+                Resource:
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/${ProjectName}-github-ai-analysis
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/${ProjectName}-github-deploy
+
+  # ---------------- Role 1: AI log analysis (Amazon Bedrock only) ----------------
+  AiAnalysisRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ProjectName}-github-ai-analysis
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !GetAtt GitHubCiUser.Arn
+            Action:
+              - sts:AssumeRole
+              - sts:TagSession
+      Policies:
+        - PolicyName: bedrock-invoke
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: InvokeBedrockModels
+                Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                # "eu." inference profiles route requests across several EU regions,
+                # so the foundation-model ARN uses a region wildcard.
+                Resource:
+                  - arn:aws:bedrock:*::foundation-model/*
+                  - !Sub arn:aws:bedrock:*:${AWS::AccountId}:inference-profile/*
+
+  # ---------------- Role 2: CloudFormation service role ----------------
+  # CloudFormation uses THIS role to create/update the ECS stack. The deploy role itself
+  # cannot create load balancers or IAM roles - it can only ask CloudFormation to.
+  CloudFormationServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ProjectName}-${EnvironmentName}-cfn-service
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudformation.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: manage-ecs-app-stack
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: EcsAndLoadBalancer
+                Effect: Allow
+                Action:
+                  - ecs:*
+                  - elasticloadbalancing:*
+                Resource: "*"
+              - Sid: SecurityGroups
+                Effect: Allow
+                Action:
+                  - ec2:Describe*
+                  - ec2:CreateSecurityGroup
+                  - ec2:DeleteSecurityGroup
+                  - ec2:AuthorizeSecurityGroupIngress
+                  - ec2:AuthorizeSecurityGroupEgress
+                  - ec2:RevokeSecurityGroupIngress
+                  - ec2:RevokeSecurityGroupEgress
+                  - ec2:CreateTags
+                  - ec2:DeleteTags
+                Resource: "*"
+              - Sid: CloudWatchLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:DeleteLogGroup
+                  - logs:PutRetentionPolicy
+                  - logs:DeleteRetentionPolicy
+                  - logs:DescribeLogGroups
+                  - logs:TagResource
+                  - logs:UntagResource
+                  - logs:TagLogGroup
+                  - logs:ListTagsForResource
+                  - logs:ListTagsLogGroup
+                Resource: "*"
+              - Sid: OnlyThisProjectsIamRoles
+                Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:GetRole
+                  - iam:UpdateRole
+                  - iam:PassRole
+                  - iam:PutRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:GetRolePolicy
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:ListRolePolicies
+                  - iam:ListAttachedRolePolicies
+                  - iam:TagRole
+                  - iam:UntagRole
+                Resource: !Sub arn:aws:iam::${AWS::AccountId}:role/${ProjectName}-${EnvironmentName}-*
+              - Sid: ServiceLinkedRolesFirstTimeOnly
+                Effect: Allow
+                Action: iam:CreateServiceLinkedRole
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    iam:AWSServiceName:
+                      - ecs.amazonaws.com
+                      - elasticloadbalancing.amazonaws.com
+
+  # ---------------- Role 3: Deploy (used by the pipeline on main) ----------------
+  DeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ProjectName}-github-deploy
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !GetAtt GitHubCiUser.Arn
+            Action:
+              - sts:AssumeRole
+              - sts:TagSession
+      Policies:
+        - PolicyName: deploy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: EcrLogin
+                Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*" # this action has no resource-level permissions
+              - Sid: EcrPushToOurRepoOnly
+                Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:BatchGetImage
+                  - ecr:CompleteLayerUpload
+                  - ecr:DescribeImages
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:InitiateLayerUpload
+                  - ecr:PutImage
+                  - ecr:UploadLayerPart
+                Resource: !Ref EcrRepositoryArn
+              - Sid: CloudFormationReadOnly
+                Effect: Allow
+                Action:
+                  - cloudformation:Describe*
+                  - cloudformation:List*
+                  - cloudformation:Get*
+                  - cloudformation:ValidateTemplate
+                Resource: "*"
+              - Sid: ChangeOnlyTheAppStack
+                Effect: Allow
+                Action:
+                  - cloudformation:CreateStack
+                  - cloudformation:UpdateStack
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:DeleteChangeSet
+                Resource: !Sub arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ProjectName}-${EnvironmentName}-app/*
+                Condition:
+                  StringEquals:
+                    # ...and only when CloudFormation uses the service role above
+                    cloudformation:RoleArn: !GetAtt CloudFormationServiceRole.Arn
+              - Sid: RecoverTheAppStack
+                Effect: Allow
+                Action:
+                  - cloudformation:DeleteStack
+                  - cloudformation:CancelUpdateStack
+                  - cloudformation:ContinueUpdateRollback
+                Resource: !Sub arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ProjectName}-${EnvironmentName}-app/*
+              - Sid: HandTheServiceRoleToCloudFormation
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt CloudFormationServiceRole.Arn
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: cloudformation.amazonaws.com
+              - Sid: ReadDiagnosticsWhenADeployFails
+                Effect: Allow
+                Action:
+                  - ecs:DescribeServices
+                  - ecs:DescribeTasks
+                  - ecs:ListTasks
+                  - ecs:DescribeClusters
+                  - elasticloadbalancing:DescribeTargetHealth
+                  - elasticloadbalancing:DescribeTargetGroups
+                  - logs:DescribeLogGroups
+                  - logs:DescribeLogStreams
+                  - logs:FilterLogEvents
+                  - logs:GetLogEvents
+                Resource: "*"
+
+Outputs:
+  GitHubCiUserName:
+    Value: !Ref GitHubCiUser
+  AiAnalysisRoleArn:
+    Value: !GetAtt AiAnalysisRole.Arn
+  DeployRoleArn:
+    Value: !GetAtt DeployRole.Arn
+  CloudFormationServiceRoleArn:
+    Value: !GetAtt CloudFormationServiceRole.Arn

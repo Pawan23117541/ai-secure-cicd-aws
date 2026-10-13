@@ -1,0 +1,21 @@
+# The ECS app stack. Deployed by the CI/CD pipeline, which passes the image tag:
+#   sceptre --var "image_tag=<commit sha>" launch -y dev/app.yaml
+# Without image_tag, ImageTag is empty and CloudFormation rejects it straight away
+# (on purpose - you cannot deploy by accident without choosing an image).
+template:
+  type: file
+  path: ecs-app.yaml
+
+# CloudFormation builds this stack with this role, not with the caller's permissions.
+# "stack_output_external" reads an output from an existing stack WITHOUT making Sceptre
+# re-launch that stack, so the pipeline only ever touches the app stack.
+cloudformation_service_role: !stack_output_external secure-cicd-dev-github-access::CloudFormationServiceRoleArn
+
+parameters:
+  ProjectName: secure-cicd
+  EnvironmentName: dev
+  VpcId: !stack_output_external secure-cicd-dev-network::VpcId
+  PublicSubnetIds: !stack_output_external secure-cicd-dev-network::PublicSubnetIds
+  RepositoryUri: !stack_output_external secure-cicd-dev-ecr::RepositoryUri
+  ImageTag: "{{ var.image_tag | default('') }}"
+  DesiredCount: "1"

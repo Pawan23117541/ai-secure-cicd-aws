@@ -1,0 +1,7 @@
+{
+  "yaml.customTags": [
+    "!stack_output scalar",
+    "!stack_output_external scalar",
+    "!environment_variable scalar"
+  ]
+}

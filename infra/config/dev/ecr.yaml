@@ -1,0 +1,5 @@
+template:
+  type: file
+  path: ecr.yaml
+parameters:
+  RepositoryName: secure-cicd-app

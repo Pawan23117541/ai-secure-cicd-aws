@@ -1,0 +1,12 @@
+template:
+  type: file
+  path: monitoring.yaml
+parameters:
+  ProjectName: secure-cicd
+  EnvironmentName: dev
+  AlertEmail: you@example.com   # <-- CHANGE THIS to your email
+  ClusterName: !stack_output_external secure-cicd-dev-app::ClusterName
+  ServiceName: !stack_output_external secure-cicd-dev-app::ServiceName
+  LoadBalancerFullName: !stack_output_external secure-cicd-dev-app::LoadBalancerFullName
+  TargetGroupFullName: !stack_output_external secure-cicd-dev-app::TargetGroupFullName
+  LogGroupName: !stack_output_external secure-cicd-dev-app::LogGroupName

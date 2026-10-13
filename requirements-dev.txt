@@ -1,0 +1,13 @@
+# App dependencies
+-r app/requirements.txt
+
+# Testing and linting
+pytest==9.1.1
+pytest-cov==7.1.0
+ruff==0.17.0
+
+# Security scanning (Python code)
+bandit==1.9.4
+
+# Amazon Bedrock (AI log analysis)
+boto3>=1.35.0

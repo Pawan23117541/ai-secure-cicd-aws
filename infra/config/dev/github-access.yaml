@@ -1,0 +1,7 @@
+template:
+  type: file
+  path: github-access.yaml
+parameters:
+  ProjectName: secure-cicd
+  EnvironmentName: dev
+  EcrRepositoryArn: !stack_output dev/ecr.yaml::RepositoryArn

@@ -1,0 +1,6 @@
+template:
+  type: file
+  path: network.yaml
+parameters:
+  ProjectName: secure-cicd
+  EnvironmentName: dev

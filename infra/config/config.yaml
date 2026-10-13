@@ -1,0 +1,4 @@
+# Sceptre project settings - shared by every stack.
+# Stack names become: <project_code>-<folder>-<file>, e.g. secure-cicd-dev-app
+project_code: secure-cicd
+region: eu-north-1
