@@ -1,6 +1,6 @@
 # ---- Container image for the Flask app (runs on Amazon ECS Fargate) ----
 
-# Base image from Amazon ECR Public (avoids Docker Hub rate limits)
+# Official Python base image from Docker Hub
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
