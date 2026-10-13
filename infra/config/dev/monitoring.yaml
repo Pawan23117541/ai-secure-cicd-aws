@@ -4,7 +4,7 @@ template:
 parameters:
   ProjectName: secure-cicd
   EnvironmentName: dev
-  AlertEmail: you@example.com   # <-- CHANGE THIS to your email
+  AlertEmail: mpavan2717@gmail.com   # <-- CHANGE THIS to your email
   ClusterName: !stack_output_external secure-cicd-dev-app::ClusterName
   ServiceName: !stack_output_external secure-cicd-dev-app::ServiceName
   LoadBalancerFullName: !stack_output_external secure-cicd-dev-app::LoadBalancerFullName
